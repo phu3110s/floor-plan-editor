@@ -152,7 +152,7 @@ function SetupDialog({ onStart }) {
           <div className="grid grid-cols-2 gap-4">
             {[
               { label: "Chiều rộng (m)", val: widthM, set: setWidthM },
-              { label: "Chiều sâu (m)", val: heightM, set: setHeightM },
+              { label: "Chiều dài (m)", val: heightM, set: setHeightM },
             ].map(({ label, val, set }) => (
               <div key={label}>
                 <label className="text-gray-500 text-xs font-semibold uppercase tracking-wider block mb-2">
@@ -237,6 +237,7 @@ function SetupDialog({ onStart }) {
               <span className="font-bold text-gray-800">
                 {widthM}m × {heightM}m
               </span>
+              <span className="text-gray-400 ml-1 text-xs">(rộng × dài)</span>
             </div>
           </div>
 
@@ -859,26 +860,68 @@ function DimensionShape({ dim, isSelected, onSelect, mmPerPx }) {
 export default function FloorPlanEditor() {
   const [config, setConfig] = useState(null);
   const [currentFloor, setCurrentFloor] = useState(1);
-  const [floorSnapshots, setFloorSnapshots] = useState({});
 
-  // ── History ───────────────────────────────────────────────────────────────
-  const [history, dispatch] = useReducer(historyReducer, {
+  // ── Per-floor independent history storage ─────────────────────────────────
+  // Each floor has its own { past, present, future }
+  const [allFloorHistories, setAllFloorHistories] = useState({
+    1: { past: [], present: INIT_STATE, future: [] },
+  });
+
+  // Current floor's history
+  const floorHistory = allFloorHistories[currentFloor] || {
     past: [],
     present: INIT_STATE,
     future: [],
-  });
-  const scene = history.present;
+  };
+
+  const updateFloorHistory = useCallback((floorNum, updater) => {
+    setAllFloorHistories((prev) => ({
+      ...prev,
+      [floorNum]: updater(
+        prev[floorNum] || { past: [], present: INIT_STATE, future: [] },
+      ),
+    }));
+  }, []);
 
   const pushScene = useCallback(
-    (patch) => dispatch({ type: "PUSH", payload: patch }),
-    [],
+    (patch) => {
+      updateFloorHistory(currentFloor, (h) => ({
+        past: [...h.past.slice(-49), h.present],
+        present: { ...h.present, ...patch },
+        future: [],
+      }));
+    },
+    [currentFloor, updateFloorHistory],
   );
-  const undo = useCallback(() => dispatch({ type: "UNDO" }), []);
-  const redo = useCallback(() => dispatch({ type: "REDO" }), []);
+
+  const undo = useCallback(() => {
+    updateFloorHistory(currentFloor, (h) => {
+      if (!h.past.length) return h;
+      return {
+        past: h.past.slice(0, -1),
+        present: h.past[h.past.length - 1],
+        future: [h.present, ...h.future],
+      };
+    });
+  }, [currentFloor, updateFloorHistory]);
+
+  const redo = useCallback(() => {
+    updateFloorHistory(currentFloor, (h) => {
+      if (!h.future.length) return h;
+      return {
+        past: [...h.past, h.present],
+        present: h.future[0],
+        future: h.future.slice(1),
+      };
+    });
+  }, [currentFloor, updateFloorHistory]);
+
+  const scene = floorHistory.present;
+  const canUndo = floorHistory.past.length > 0;
+  const canRedo = floorHistory.future.length > 0;
 
   const { walls, rooms, doors, windows, iotDevs, labels, dims } = scene;
 
-  // Setters that go through history
   const setWalls = (fn) => pushScene({ walls: fn(walls) });
   const setRooms = (fn) => pushScene({ rooms: fn(rooms) });
   const setDoors = (fn) => pushScene({ doors: fn(doors) });
@@ -928,13 +971,16 @@ export default function FloorPlanEditor() {
 
   // ── Floor switching ───────────────────────────────────────────────────────
   const switchFloor = (f) => {
-    // save current
-    setFloorSnapshots((prev) => ({ ...prev, [currentFloor]: history.present }));
-    // load target
-    const saved = floorSnapshots[f];
-    dispatch({ type: "PUSH", payload: saved || INIT_STATE });
+    // Each floor stores its own history in allFloorHistories
+    // Just init the floor if it doesn't exist yet
+    setAllFloorHistories((prev) => ({
+      ...prev,
+      [f]: prev[f] || { past: [], present: INIT_STATE, future: [] },
+    }));
     setCurrentFloor(f);
     setSelId(null);
+    setDrawStart(null);
+    setDimStart(null);
   };
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
@@ -1307,7 +1353,7 @@ export default function FloorPlanEditor() {
         {/* Undo / Redo */}
         <button
           onClick={undo}
-          disabled={!history.past.length}
+          disabled={!canUndo}
           title="Ctrl+Z"
           className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30 transition-all text-sm font-bold"
         >
@@ -1315,7 +1361,7 @@ export default function FloorPlanEditor() {
         </button>
         <button
           onClick={redo}
-          disabled={!history.future.length}
+          disabled={!canRedo}
           title="Ctrl+Y"
           className="w-10 h-10 rounded-xl flex items-center justify-center text-gray-500 hover:bg-gray-100 disabled:opacity-30 transition-all text-sm font-bold"
         >
@@ -1410,6 +1456,38 @@ export default function FloorPlanEditor() {
             </span>
           )}
         </div>
+
+        {/* Floor Tab Bar */}
+        {config.floors > 1 && (
+          <div className="bg-white border-b border-gray-200 px-4 flex items-center gap-1 h-10 shrink-0">
+            <span className="text-xs text-gray-400 font-medium mr-2">
+              Tầng:
+            </span>
+            {Array.from({ length: config.floors }, (_, i) => i + 1).map((f) => {
+              const hasData =
+                allFloorHistories[f]?.present &&
+                Object.values(allFloorHistories[f].present).some(
+                  (arr) => arr.length > 0,
+                );
+              return (
+                <button
+                  key={f}
+                  onClick={() => switchFloor(f)}
+                  className={`relative px-4 h-8 rounded-lg text-sm font-semibold transition-all border ${
+                    currentFloor === f
+                      ? "bg-gray-900 border-gray-900 text-white"
+                      : "border-gray-200 text-gray-500 hover:border-gray-400 hover:bg-gray-50"
+                  }`}
+                >
+                  Tầng {f}
+                  {hasData && currentFloor !== f && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Stage */}
         <div className="flex-1 overflow-auto flex items-start justify-start p-6 bg-gray-100">
