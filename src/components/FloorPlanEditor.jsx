@@ -525,7 +525,14 @@ function WallShape({ wall, isSelected, onSelect }) {
 }
 
 // ─── Door ─────────────────────────────────────────────────────────────────────
-function DoorShape({ door, isSelected, onSelect, onChange, mode }) {
+function DoorShape({
+  door,
+  isSelected,
+  onSelect,
+  onChange,
+  mode,
+  onSwitchToSelect,
+}) {
   const size = door.size || 60,
     flip = door.flip ? -1 : 1;
   return (
@@ -533,8 +540,12 @@ function DoorShape({ door, isSelected, onSelect, onChange, mode }) {
       x={door.x}
       y={door.y}
       rotation={door.rotation || 0}
-      draggable={mode === "select"}
+      draggable={true}
       onClick={() => onSelect(door.id)}
+      onDragStart={() => {
+        onSelect(door.id);
+        onSwitchToSelect?.();
+      }}
       onDragEnd={(e) =>
         onChange(door.id, { x: snapV(e.target.x()), y: snapV(e.target.y()) })
       }
@@ -582,15 +593,26 @@ function DoorShape({ door, isSelected, onSelect, onChange, mode }) {
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
-function WindowShape({ win, isSelected, onSelect, onChange, mode }) {
+function WindowShape({
+  win,
+  isSelected,
+  onSelect,
+  onChange,
+  mode,
+  onSwitchToSelect,
+}) {
   const size = win.size || 80;
   return (
     <Group
       x={win.x}
       y={win.y}
       rotation={win.rotation || 0}
-      draggable={mode === "select"}
+      draggable={true}
       onClick={() => onSelect(win.id)}
+      onDragStart={() => {
+        onSelect(win.id);
+        onSwitchToSelect?.();
+      }}
       onDragEnd={(e) =>
         onChange(win.id, { x: snapV(e.target.x()), y: snapV(e.target.y()) })
       }
@@ -617,7 +639,15 @@ function WindowShape({ win, isSelected, onSelect, onChange, mode }) {
 }
 
 // ─── Room ─────────────────────────────────────────────────────────────────────
-function RoomShape({ room, isSelected, onSelect, onChange, mode, mmPerPx }) {
+function RoomShape({
+  room,
+  isSelected,
+  onSelect,
+  onChange,
+  mode,
+  mmPerPx,
+  onSwitchToSelect,
+}) {
   const rectRef = useRef(),
     trRef = useRef();
   useEffect(() => {
@@ -643,8 +673,14 @@ function RoomShape({ room, isSelected, onSelect, onChange, mode, mmPerPx }) {
         shadowEnabled={isSelected}
         shadowColor="rgba(37,99,235,0.15)"
         shadowBlur={8}
-        draggable={mode === "select"}
-        onClick={() => onSelect(room.id)}
+        draggable={true}
+        onClick={() => {
+          onSelect(room.id);
+        }}
+        onDragStart={() => {
+          onSelect(room.id);
+          onSwitchToSelect?.();
+        }}
         onDragEnd={(e) =>
           onChange(room.id, { x: snapV(e.target.x()), y: snapV(e.target.y()) })
         }
@@ -722,14 +758,25 @@ function RoomShape({ room, isSelected, onSelect, onChange, mode, mmPerPx }) {
 }
 
 // ─── IoT ─────────────────────────────────────────────────────────────────────
-function IotMarker({ device, isSelected, onSelect, onChange, mode }) {
+function IotMarker({
+  device,
+  isSelected,
+  onSelect,
+  onChange,
+  mode,
+  onSwitchToSelect,
+}) {
   const t = IOT_TYPES.find((x) => x.type === device.type) || IOT_TYPES[0];
   return (
     <Group
       x={device.x}
       y={device.y}
-      draggable={mode === "select"}
+      draggable={true}
       onClick={() => onSelect(device.id)}
+      onDragStart={() => {
+        onSelect(device.id);
+        onSwitchToSelect?.();
+      }}
       onDragEnd={(e) =>
         onChange(device.id, { x: snapV(e.target.x()), y: snapV(e.target.y()) })
       }
@@ -759,14 +806,25 @@ function IotMarker({ device, isSelected, onSelect, onChange, mode }) {
 }
 
 // ─── Label ────────────────────────────────────────────────────────────────────
-function LabelShape({ label, isSelected, onSelect, onChange, mode }) {
+function LabelShape({
+  label,
+  isSelected,
+  onSelect,
+  onChange,
+  mode,
+  onSwitchToSelect,
+}) {
   const w = (label.text?.length || 4) * 7 + 16;
   return (
     <Group
       x={label.x}
       y={label.y}
-      draggable={mode === "select"}
+      draggable={true}
       onClick={() => onSelect(label.id)}
+      onDragStart={() => {
+        onSelect(label.id);
+        onSwitchToSelect?.();
+      }}
       onDragEnd={(e) =>
         onChange(label.id, { x: snapV(e.target.x()), y: snapV(e.target.y()) })
       }
@@ -948,7 +1006,11 @@ export default function FloorPlanEditor() {
   const [renameVal, setRenameVal] = useState("");
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
-  const stageRef = useRef();
+  const switchToSelect = useCallback(() => {
+    setTool("select");
+    setDrawStart(null);
+    setDimStart(null);
+  }, []);
 
   // ── Config derived ────────────────────────────────────────────────────────
   const widthPx = config ? Math.round(config.widthMm / config.mmPerPx) : 0;
@@ -1216,13 +1278,104 @@ export default function FloorPlanEditor() {
     return () => window.removeEventListener("keydown", h);
   }, [undo, redo, deleteSelected, selectedId, rotateSelected]);
 
-  // ── Export ────────────────────────────────────────────────────────────────
+  // ── Export PNG ────────────────────────────────────────────────────────────
   const exportPng = () => {
     const uri = stageRef.current.toDataURL({ pixelRatio: 2 });
     const a = document.createElement("a");
     a.href = uri;
     a.download = `floor_${currentFloor}.png`;
     a.click();
+  };
+
+  // ── Export JSON (Function Areas) ──────────────────────────────────────────
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  const buildExportJson = () => {
+    if (!config) return {};
+    const floorList = Array.from({ length: config.floors }, (_, i) => i + 1);
+
+    const buildFloor = (floorNum) => {
+      const fh = allFloorHistories[floorNum]?.present || INIT_STATE;
+
+      // Figure out which IoT devices are inside which room (by bounding box)
+      const getDevicesInRoom = (room) =>
+        fh.iotDevs.filter((d) => {
+          const rx = room.x - ORIGIN_X,
+            ry = room.y - ORIGIN_Y;
+          const dx = d.x - ORIGIN_X,
+            dy = d.y - ORIGIN_Y;
+          return (
+            dx >= rx &&
+            dx <= rx + room.width &&
+            dy >= ry &&
+            dy <= ry + room.height
+          );
+        });
+
+      return {
+        floor: floorNum,
+        function_areas: fh.rooms.map((r) => {
+          const devicesInRoom = getDevicesInRoom(r);
+          return {
+            id: r.id,
+            name: r.name || `Room_${r.id}`,
+            position_mm: {
+              x: Math.round((r.x - ORIGIN_X) * config.mmPerPx),
+              y: Math.round((r.y - ORIGIN_Y) * config.mmPerPx),
+            },
+            size_mm: {
+              width: Math.round(r.width * config.mmPerPx),
+              height: Math.round(r.height * config.mmPerPx),
+            },
+            iot_devices: devicesInRoom.map((d) => ({
+              id: d.id,
+              type: d.type,
+              position_mm: {
+                x: Math.round((d.x - ORIGIN_X) * config.mmPerPx),
+                y: Math.round((d.y - ORIGIN_Y) * config.mmPerPx),
+              },
+            })),
+          };
+        }),
+        // IoT devices NOT inside any room
+        unassigned_devices: fh.iotDevs
+          .filter(
+            (d) =>
+              !fh.rooms.some((r) => {
+                const rx = r.x - ORIGIN_X,
+                  ry = r.y - ORIGIN_Y;
+                const dx = d.x - ORIGIN_X,
+                  dy = d.y - ORIGIN_Y;
+                return (
+                  dx >= rx &&
+                  dx <= rx + r.width &&
+                  dy >= ry &&
+                  dy <= ry + r.height
+                );
+              }),
+          )
+          .map((d) => ({
+            id: d.id,
+            type: d.type,
+            position_mm: {
+              x: Math.round((d.x - ORIGIN_X) * config.mmPerPx),
+              y: Math.round((d.y - ORIGIN_Y) * config.mmPerPx),
+            },
+          })),
+      };
+    };
+
+    return {
+      house: {
+        size_mm: {
+          width: config.widthMm,
+          height: config.heightMm,
+        },
+        scale: config.scaleLabel,
+        total_floors: config.floors,
+      },
+      floors: floorList.map(buildFloor),
+    };
   };
 
   // ── Draw preview ──────────────────────────────────────────────────────────
@@ -1446,7 +1599,13 @@ export default function FloorPlanEditor() {
             onClick={exportPng}
             className="bg-gray-900 hover:bg-gray-700 text-white text-xs font-semibold px-4 h-8 rounded-lg transition-all ml-1"
           >
-            Xuất PNG ↓
+            PNG ↓
+          </button>
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 h-8 rounded-lg transition-all"
+          >
+            JSON / Export
           </button>
 
           {tool !== "select" && (
@@ -1491,17 +1650,13 @@ export default function FloorPlanEditor() {
 
         {/* Stage */}
         <div className="flex-1 overflow-auto flex items-start justify-start p-6 bg-gray-100">
-          <div
-            style={{
-              transform: `scale(${viewScale})`,
-              transformOrigin: "top left",
-              display: "inline-block",
-            }}
-          >
+          <div style={{ display: "inline-block" }}>
             <Stage
               ref={stageRef}
-              width={stageW}
-              height={stageH}
+              width={Math.round(stageW * viewScale)}
+              height={Math.round(stageH * viewScale)}
+              scaleX={viewScale}
+              scaleY={viewScale}
               onMouseDown={onMouseDown}
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
@@ -1529,6 +1684,7 @@ export default function FloorPlanEditor() {
                     onChange={updRoom}
                     mode={tool}
                     mmPerPx={config.mmPerPx}
+                    onSwitchToSelect={switchToSelect}
                   />
                 ))}
               </Layer>
@@ -1550,6 +1706,7 @@ export default function FloorPlanEditor() {
                     onSelect={handleSelect}
                     onChange={updDoor}
                     mode={tool}
+                    onSwitchToSelect={switchToSelect}
                   />
                 ))}
                 {windows.map((w) => (
@@ -1560,6 +1717,7 @@ export default function FloorPlanEditor() {
                     onSelect={handleSelect}
                     onChange={updWin}
                     mode={tool}
+                    onSwitchToSelect={switchToSelect}
                   />
                 ))}
                 {dims.map((d) => (
@@ -1593,6 +1751,7 @@ export default function FloorPlanEditor() {
                     onSelect={handleSelect}
                     onChange={updIot}
                     mode={tool}
+                    onSwitchToSelect={switchToSelect}
                   />
                 ))}
                 {labels.map((l) => (
@@ -1603,6 +1762,7 @@ export default function FloorPlanEditor() {
                     onSelect={handleSelect}
                     onChange={updLabel}
                     mode={tool}
+                    onSwitchToSelect={switchToSelect}
                   />
                 ))}
               </Layer>
@@ -1944,6 +2104,148 @@ export default function FloorPlanEditor() {
           </div>
         </div>
       </aside>
+
+      {/* ── EXPORT MODAL ───────────────────────────────────────────────── */}
+      {showExportModal &&
+        (() => {
+          const exportData = buildExportJson();
+          const jsonStr = JSON.stringify(exportData, null, 2);
+          const downloadJson = () => {
+            const blob = new Blob([jsonStr], { type: "application/json" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "floorplan.json";
+            a.click();
+          };
+          const copyJson = () => navigator.clipboard.writeText(jsonStr);
+          const totalRooms =
+            exportData.floors?.reduce(
+              (s, f) => s + f.function_areas.length,
+              0,
+            ) || 0;
+          const totalIot =
+            exportData.floors?.reduce(
+              (s, f) =>
+                s +
+                f.function_areas.reduce(
+                  (s2, r) => s2 + r.iot_devices.length,
+                  0,
+                ) +
+                f.unassigned_devices.length,
+              0,
+            ) || 0;
+
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+                {/* Header */}
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+                  <div>
+                    <h2 className="font-bold text-gray-900 text-base">
+                      Xuất dữ liệu Function Areas
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {totalRooms} khu vực · {totalIot} thiết bị IoT ·{" "}
+                      {config.floors} tầng
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowExportModal(false)}
+                    className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center text-lg transition-all"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Schema explanation */}
+                <div className="px-5 py-3 bg-blue-50 border-b border-blue-100 shrink-0">
+                  <p className="text-xs text-blue-700 font-semibold mb-1">
+                    Cấu trúc dữ liệu
+                  </p>
+                  <div className="flex gap-4 text-xs text-blue-600 flex-wrap">
+                    <span>
+                      🏠 <b>house</b> — kích thước, tỉ lệ, số tầng
+                    </span>
+                    <span>
+                      📐 <b>function_areas</b> — vị trí & kích thước phòng (mm)
+                    </span>
+                    <span>
+                      📡 <b>iot_devices</b> — thiết bị gán vào từng phòng (theo
+                      bounding box)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Floor summary pills */}
+                <div className="px-5 py-2.5 border-b border-gray-100 flex gap-2 flex-wrap shrink-0">
+                  {exportData.floors?.map((f) => (
+                    <div
+                      key={f.floor}
+                      className="flex items-center gap-1.5 bg-gray-100 rounded-full px-3 py-1"
+                    >
+                      <span className="text-xs font-bold text-gray-700">
+                        Tầng {f.floor}
+                      </span>
+                      <span className="text-xs text-gray-400">·</span>
+                      <span className="text-xs text-gray-600">
+                        {f.function_areas.length} phòng
+                      </span>
+                      {f.function_areas.reduce(
+                        (s, r) => s + r.iot_devices.length,
+                        0,
+                      ) > 0 && (
+                        <>
+                          <span className="text-xs text-gray-400">·</span>
+                          <span className="text-xs text-blue-600">
+                            {f.function_areas.reduce(
+                              (s, r) => s + r.iot_devices.length,
+                              0,
+                            )}{" "}
+                            IoT
+                          </span>
+                        </>
+                      )}
+                      {f.unassigned_devices.length > 0 && (
+                        <span className="text-xs text-amber-600 ml-1">
+                          ⚠ {f.unassigned_devices.length} chưa gán
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* JSON preview */}
+                <div className="flex-1 overflow-auto p-4 bg-gray-950">
+                  <pre className="text-xs text-green-400 font-mono leading-relaxed whitespace-pre-wrap">
+                    {jsonStr}
+                  </pre>
+                </div>
+
+                {/* Actions */}
+                <div className="px-5 py-3 border-t border-gray-100 flex gap-2 shrink-0">
+                  <button
+                    onClick={copyJson}
+                    className="flex-1 border border-gray-200 hover:border-gray-400 text-gray-700 text-sm font-medium py-2.5 rounded-xl transition-all"
+                  >
+                    📋 Copy JSON
+                  </button>
+                  <button
+                    onClick={downloadJson}
+                    className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold py-2.5 rounded-xl transition-all"
+                  >
+                    ⬇ Download floorplan.json
+                  </button>
+                  <button
+                    onClick={exportPng}
+                    className="flex-1 bg-gray-900 hover:bg-gray-700 text-white text-sm font-semibold py-2.5 rounded-xl transition-all"
+                  >
+                    🖼 Xuất PNG
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }
